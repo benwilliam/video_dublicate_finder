@@ -81,6 +81,25 @@ def save_data(data, output_file):
     with open(output_file, 'w') as f:
         json.dump(data, f, indent=2)
 
+def find_moved_file(file_path, hash_data):
+    """
+    Check if a file has been moved by comparing filename and size with existing entries.
+    Returns the existing hash entry if found, None otherwise.
+    """
+    file_size = os.path.getsize(file_path)
+    file_name = os.path.basename(file_path)
+    
+    # Look for matching filename and size in existing data
+    for existing_path, data in hash_data.items():
+        existing_name = os.path.basename(existing_path)
+        existing_size = data.get("size_bytes", 0)
+        
+        if existing_name == file_name and existing_size == file_size:
+            # File likely moved from existing_path to file_path
+            return existing_path, data
+    
+    return None, None
+
 def calculate_hashes(directory, output_file):
     """Calculate videohash for all video files and save to JSON."""
     # Get all video files
@@ -94,17 +113,48 @@ def calculate_hashes(directory, output_file):
     # Process each video file
     processed = 0
     skipped = 0
+    reused = 0
     
     for i, file_path in enumerate(video_files):
         # Check if we should stop due to interruption
         if interrupted:
             break
             
-        # Skip if already processed
+         # Check if path exists in hash data
         if file_path in hash_data:
-            skipped += 1
-            print(f"[{i+1}/{total_files}] Skipping already processed file: {file_path}")
-            continue
+            # Verify the file size hasn't changed
+            current_size = os.path.getsize(file_path)
+            stored_size = hash_data[file_path].get("size_bytes", 0)
+            
+            if current_size == stored_size:
+                # File unchanged, skip processing
+                skipped += 1
+                print(f"[{i+1}/{total_files}] Skipping already processed file: {file_path}")
+                continue
+            else:
+                # File size changed, needs rehashing
+                print(f"[{i+1}/{total_files}] File size changed for: {file_path}")
+                print(f"  Previous size: {stored_size} bytes, Current size: {current_size} bytes")
+                print(f"  Rehashing file...")
+                # Continue with processing to recalculate hash
+        else:
+            # Check if file was moved (same name and size exists in database)
+            original_path, existing_data = find_moved_file(file_path, hash_data)
+            if original_path and existing_data:
+                # File was moved, reuse the hash
+                print(f"[{i+1}/{total_files}] File appears to be moved from: {original_path}")
+                print(f"  Reusing hash for: {file_path}")
+                
+                # Get file size in bytes
+                file_size = os.path.getsize(file_path)
+                
+                # Copy existing hash data for the new path
+                hash_data[file_path] = {
+                    "hash": existing_data["hash"],
+                    "size_bytes": file_size,
+                }
+                reused += 1
+                continue
         
         try:
             print(f"[{i+1}/{total_files}] Processing: {file_path}")
@@ -137,9 +187,9 @@ def calculate_hashes(directory, output_file):
             processed += 1
             
             # Save periodically (every 5 files)
-            if processed % 5 == 0:
+            if (processed + reused) % 5 == 0:
                 save_data(hash_data, output_file)
-                print(f"Progress saved. Processed {processed} files so far.")
+                print(f"Progress saved. Processed {processed} files, reused {reused} hashes so far.")
                 
         except Exception as e:
             print(f"Error processing {file_path}: {str(e)}")
@@ -151,6 +201,7 @@ def calculate_hashes(directory, output_file):
     print("\nSummary:")
     print(f"Total video files found: {total_files}")
     print(f"Files processed this run: {processed}")
+    print(f"Files with reused hashes (moved files): {reused}")
     print(f"Files skipped (already processed): {skipped}")
     print(f"Total hashes in database: {len(hash_data)}")
     

@@ -1,3 +1,7 @@
+# any JSON file
+*.json
+*.JSON
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
