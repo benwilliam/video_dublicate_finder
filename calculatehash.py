@@ -22,15 +22,22 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 def get_video_files(directory):
-    """Get all video files from the specified directory."""
+    """Get all video files from the specified directory, ordered by size (largest first)."""
     video_extensions = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg'}
     
     video_files = []
     for path in Path(directory).rglob('*'):
         if path.is_file() and path.suffix.lower() in video_extensions:
-            video_files.append(str(path.absolute()))
+            # Get the file size using os.path.getsize
+            file_size = os.path.getsize(path)
+            # Store both the path and its size
+            video_files.append((str(path.absolute()), file_size))
     
-    return video_files
+    # Sort by file size in descending order (largest first)
+    video_files.sort(key=lambda x: x[1], reverse=True)
+    
+    # Return just the file paths, without the sizes
+    return [file_path for file_path, _ in video_files]
 
 def get_video_duration(file_path):
     """Get the duration of a video file in seconds using ffprobe."""
@@ -70,7 +77,7 @@ def load_existing_data(output_file):
     """Load existing hash data if available."""
     if os.path.exists(output_file):
         try:
-            with open(output_file, 'r') as f:
+            with open(output_file, mode='r', encoding="utf8") as f:
                 return json.load(f)
         except json.JSONDecodeError:
             print(f"Error reading {output_file}. Starting with empty data.")
@@ -119,11 +126,11 @@ def calculate_hashes(directory, output_file):
         # Check if we should stop due to interruption
         if interrupted:
             break
-            
+
+        current_size = os.path.getsize(file_path)    
          # Check if path exists in hash data
         if file_path in hash_data:
             # Verify the file size hasn't changed
-            current_size = os.path.getsize(file_path)
             stored_size = hash_data[file_path].get("size_bytes", 0)
             
             if current_size == stored_size:
@@ -168,7 +175,7 @@ def calculate_hashes(directory, output_file):
                 frame_interval = 63
             frame_interval = 1/frame_interval
             
-            print(f"  Duration: {duration:.2f}s, Frame interval: {frame_interval:.4f}/s")
+            print(f"  Duration: {duration:.2f}s, Frame interval: {frame_interval:.4f}/s, Size: {current_size:,}" )
             
             # Calculate the video hash with dynamic frame interval
             vh = VideoHash(path=file_path, frame_interval=frame_interval, storage_path="r:\\")
