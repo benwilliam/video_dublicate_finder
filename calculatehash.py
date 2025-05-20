@@ -64,6 +64,57 @@ def get_video_duration(file_path):
         print(f"Error getting video duration for {file_path}: {str(e)}")
         return 0
 
+def get_video_info(file_path):
+    # Command to get video info in a single line
+    cmd = [
+        'ffprobe', 
+        '-v', 'error', 
+        '-select_streams', 'v:0', 
+        '-show_entries', 'stream=codec_name,width,height,r_frame_rate', 
+        '-show_entries', 'format=duration,size', 
+        '-of', 'csv=p=0:s=|', 
+        file_path
+    ]
+    
+    # Run the command and get the output
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    
+    if result.returncode != 0:
+        raise Exception(f"Error running ffprobe: {result.stderr}")
+    
+    # Parse the output
+    # Expected format: codec,width,height,fps_numerator/fps_denominator,duration,size
+    output = result.stdout.strip()
+    output = output.replace('\n', '|')
+    parts = output.split('|')
+    
+    if len(parts) >= 6:
+        codec = parts[0]
+        width = int(parts[1])
+        height = int(parts[2])
+        resolution = f"{width}x{height}"
+        
+        # Parse framerate which is in format "num/den"
+        fps_parts = parts[3].split('/')
+        if len(fps_parts) == 2:
+            framerate = float(fps_parts[0]) / float(fps_parts[1])
+        else:
+            framerate = float(fps_parts[0])
+        
+        duration = float(parts[4])
+        size = int(parts[5])
+        
+        return {
+            "codec": codec,
+            "resolution": resolution,
+            "framerate": framerate,
+            "duration": duration,
+            "size": size
+        }
+    else:
+        raise Exception(f"Unexpected output format: {output}")
+
+
 def calculate_frame_interval(duration, max_frames=63):
     """Calculate the frame interval to use at most max_frames frames."""
     if duration <= 0:
@@ -107,7 +158,7 @@ def find_moved_file(file_path, hash_data):
     
     return None, None
 
-def calculate_hashes(directory, output_file):
+def calculate_hashes(directory, output_file, verbose=False, storagepath=None):
     """Calculate videohash for all video files and save to JSON."""
     # Get all video files
     video_files = get_video_files(directory)
@@ -167,7 +218,8 @@ def calculate_hashes(directory, output_file):
             print(f"[{i+1}/{total_files}] Processing: {file_path}")
             
             # Get video duration
-            duration = get_video_duration(file_path)
+            video_info = get_video_info(file_path)
+            duration = video_info['duration']
             
             # Calculate appropriate frame interval for max 10 frames
             frame_interval = calculate_frame_interval(duration, max_frames=63)
@@ -175,21 +227,18 @@ def calculate_hashes(directory, output_file):
                 frame_interval = 63
             frame_interval = 1/frame_interval
             
-            print(f"  Duration: {duration:.2f}s, Frame interval: {frame_interval:.4f}/s, Size: {current_size:,}" )
-            
+            print(f"  Duration:{duration:.2f}s, Frameinterval:{frame_interval:.4f}/s, Size:{current_size:,} Bytes, Codec:{video_info['codec']}, Resolution:{video_info['resolution']}, Framerate:{video_info['framerate']}fps" )             
+                
             # Calculate the video hash with dynamic frame interval
-            vh = VideoHash(path=file_path, frame_interval=frame_interval, storage_path="r:\\")
+            vh = VideoHash(path=file_path, frame_interval=frame_interval, storage_path=storagepath)
             hash_value = vh.hash_hex
             vh.delete_storage_path()
             #print(f"storage path: {(vh.storage_path)} ")
-            
-            # Get file size in bytes
-            file_size = os.path.getsize(file_path)
-            
+
             # Store result
             hash_data[file_path] = {
                 "hash": hash_value,
-                "size_bytes": file_size,
+                "size_bytes": current_size,
             }
             processed += 1
             
@@ -223,6 +272,9 @@ def main():
     parser.add_argument('directory', help='Directory containing video files')
     parser.add_argument('--output', '-o', default='video_hashes.json', 
                       help='Output JSON file (default: video_hashes.json)')
+    parser.add_argument('--verbose','-v', action='store_true', help="Prints ffprobe output for each file in precess")
+    parser.add_argument('--storagepath', '-s', default='None', 
+                      help='the temp folder where to store working data (default: users temp folder)')
     
     args = parser.parse_args()
     
@@ -235,7 +287,7 @@ def main():
     print(f"Directory: {args.directory}")
     print(f"Output file: {args.output}")
     
-    calculate_hashes(args.directory, args.output)
+    calculate_hashes(args.directory, args.output, verbose=args.verbose, storagepath=args.storagepath)
 
 if __name__ == "__main__":
     main()
