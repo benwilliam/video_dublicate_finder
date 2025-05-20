@@ -39,31 +39,6 @@ def get_video_files(directory):
     # Return just the file paths, without the sizes
     return [file_path for file_path, _ in video_files]
 
-def get_video_duration(file_path):
-    """Get the duration of a video file in seconds using ffprobe."""
-    try:
-        cmd = [
-            'ffprobe', 
-            '-v', 'error', 
-            '-show_entries', 'format=duration', 
-            '-of', 'json',
-            file_path
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            raise Exception(f"ffprobe error: {result.stderr}")
-        
-        # Parse the JSON output
-        data = json.loads(result.stdout)
-        duration = float(data['format']['duration'])
-        
-        return duration
-    except Exception as e:
-        print(f"Error getting video duration for {file_path}: {str(e)}")
-        return 0
-
 def get_video_info(file_path):
     # Command to get video info in a single line
     cmd = [
