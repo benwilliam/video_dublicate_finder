@@ -1,3 +1,5 @@
+[[_TOC_]]
+
 # video_duplicate_finder
 Creates 64-bit hashes of videos and compares them.
 
