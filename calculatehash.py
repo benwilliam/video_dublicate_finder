@@ -153,6 +153,11 @@ def calculate_hashes(directory, output_file, verbose=False, storagepath=None):
         if interrupted:
             break
 
+        if not os.path.exists(file_path):
+            print(f"File not found: {file_path}. Skipping...")
+            skipped += 1
+            continue
+
         current_size = os.path.getsize(file_path)    
          # Check if path exists in hash data
         if file_path in hash_data:
@@ -247,7 +252,7 @@ def main():
     parser.add_argument('directory', help='Directory containing video files')
     parser.add_argument('--output', '-o', default='video_hashes.json', 
                       help='Output JSON file (default: video_hashes.json)')
-    parser.add_argument('--verbose','-v', action='store_true', help="Prints ffprobe output for each file in precess")
+    parser.add_argument('--verbose','-v', action='store_true', help="not used yet")
     parser.add_argument('--storagepath', '-s', default='None', 
                       help='the temp folder where to store working data (default: users temp folder)')
     

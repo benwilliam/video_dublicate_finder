@@ -53,12 +53,12 @@ def main():
                 # Print the first element and the top 3 closest matches (or fewer if less available)
                 print(f"Reference: {first_path}")
                 print("Top 3 closest matches:")
-                for i, (distance, path) in enumerate(distances[:3], 1):
+                for i, (distance, path) in enumerate(distances[:10], 1):
                     print(f"{i}. Distance: {distance}, Path: {path}")
                 print("-" * 80)
             else:
                 print(f"{first_path}")
-                for i, (distance, path) in enumerate(distances[:3], 1):
+                for i, (distance, path) in enumerate(distances[:10], 1):
                     print(f"{path}")
                 print(f"---")
             
