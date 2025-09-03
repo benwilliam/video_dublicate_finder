@@ -6,7 +6,7 @@ import signal
 import sys
 import subprocess
 from pathlib import Path
-from videohash import VideoHash
+from videohash2 import VideoHash
 
 # Global flag to handle interruptions
 interrupted = False
@@ -21,7 +21,7 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-def get_video_files(directory):
+def get_video_files(directory, sort_largest_first=True):
     """Get all video files from the specified directory, ordered by size (largest first)."""
     video_extensions = {'.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v', '.mpg', '.mpeg'}
     
@@ -34,7 +34,7 @@ def get_video_files(directory):
             video_files.append((str(path.absolute()), file_size))
     
     # Sort by file size in descending order (largest first)
-    video_files.sort(key=lambda x: x[1], reverse=True)
+    video_files.sort(key=lambda x: x[1], reverse=sort_largest_first)
     
     # Return just the file paths, without the sizes
     return [file_path for file_path, _ in video_files]
@@ -133,10 +133,10 @@ def find_moved_file(file_path, hash_data):
     
     return None, None
 
-def calculate_hashes(directory, output_file, verbose=False, storagepath=None):
+def calculate_hashes(directory, output_file, verbose=False, storagepath=None, dont_copy=True, sort_biggest_first=True):
     """Calculate videohash for all video files and save to JSON."""
     # Get all video files
-    video_files = get_video_files(directory)
+    video_files = get_video_files(directory, sort_biggest_first)
     total_files = len(video_files)
     print(f"Found {total_files} video files in {directory}")
     
@@ -208,9 +208,11 @@ def calculate_hashes(directory, output_file, verbose=False, storagepath=None):
             frame_interval = 1/frame_interval
             
             print(f"  Duration:{duration:.2f}s, Frameinterval:{frame_interval:.4f}/s, Size:{current_size:,} Bytes, Codec:{video_info['codec']}, Resolution:{video_info['resolution']}, Framerate:{video_info['framerate']}fps" )             
-                
+            
+
+
             # Calculate the video hash with dynamic frame interval
-            vh = VideoHash(path=file_path, frame_interval=frame_interval, storage_path=storagepath)
+            vh = VideoHash(path=file_path, frame_interval=frame_interval, storage_path=storagepath, do_not_copy=dont_copy)
             hash_value = vh.hash_hex
             vh.delete_storage_path()
             #print(f"storage path: {(vh.storage_path)} ")
@@ -255,6 +257,8 @@ def main():
     parser.add_argument('--verbose','-v', action='store_true', help="not used yet")
     parser.add_argument('--storagepath', '-s', default='None', 
                       help='the temp folder where to store working data (default: users temp folder)')
+    parser.add_argument('--copy','-c', action='store_false', help="copy the video file first to temp")
+    parser.add_argument('--reverse','-r', action='store_false', help="revers precessing order, now starts with the smallest file first")
     
     args = parser.parse_args()
     
@@ -267,7 +271,7 @@ def main():
     print(f"Directory: {args.directory}")
     print(f"Output file: {args.output}")
     
-    calculate_hashes(args.directory, args.output, verbose=args.verbose, storagepath=args.storagepath)
+    calculate_hashes(args.directory, args.output, verbose=args.verbose, storagepath=args.storagepath, dont_copy=args.copy, sort_biggest_first=args.reverse)
 
 if __name__ == "__main__":
     main()
