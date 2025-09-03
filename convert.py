@@ -90,7 +90,7 @@ def get_video_info(file_path):
         raise Exception(f"Unexpected output format: {output}")
 
 
-def convert(directory, outputdir, verbose=False, sort_biggest_first=True):
+def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progress_update_interval=1):
     """Calculate videohash for all video files and save to JSON."""
     # Get all video files
     video_files = get_video_files(directory, sort_biggest_first)
@@ -102,14 +102,28 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True):
 
     ffmpeg_process = None  # temp process variable to check in the progress callback
 
-    
+    last_file_locked = None
     for i, file_path in enumerate(video_files):
         # Check if we should stop due to interruption
         if interrupted:
             break
 
+        # Check for .lock file and skip if exists
+        lock_file = file_path + ".lock"
+        if os.path.exists(lock_file):
+            print(f"Skipping (lock exists): {file_path}")
+            continue
+
         if not os.path.exists(file_path):
             print(f"File not found: {file_path}. Skipping...")
+            continue
+
+        # Create .lock file
+        try:
+            with open(lock_file, "w") as f:
+                last_file_locked = lock_file
+        except Exception as e:
+            print(f"Could not create lock file for {file_path}: {str(e)}")
             continue
 
         current_size = os.path.getsize(file_path)    
@@ -140,11 +154,16 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True):
                 )
             )
 
+            progress_counter = [0]  # mutable counter for closure
+
             @ffmpeg.on("progress")
             def on_progress(progress: Progress):
+                progress_counter[0] += 1
+                if progress_counter[0] % progress_update_interval != 0:
+                    return
                 eta = 0 if progress.speed == 0 else (duration-progress.time.seconds)/progress.speed
                 time = datetime.timedelta(seconds=eta)
-                print(f"ETA:{time}s | {100*progress.time.seconds/duration:.2f}% | size:{progress.size:,} | fps:{progress.fps} | bps:{progress.bitrate} | speed:{progress.speed}x", end='\r', flush=True)
+                print(f"ETA:{str(time).split('.')[0]}s | {100 * progress.time.seconds / duration:.2f}% | size:{progress.size:,} | fps:{progress.fps:.2f} | bps:{progress.bitrate} | speed:{progress.speed:.2f}x", end='\r', flush=True)
                 if interrupted and ffmpeg_process is not None:
                     ffmpeg_process.terminate()
 
@@ -168,24 +187,35 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True):
             except Exception as e:
                 print(f"\nError comparing durations or deleting file: {str(e)}")
 
-
             processed += 1
 
-
-            
-           
         except Exception as e:
             print(f"Error processing {file_path}: {str(e)}")
-        
+        finally:
+            # Always remove lock file after processing or error
+            try:
+                if os.path.exists(lock_file):
+                    os.remove(lock_file)
+            except Exception as e:
+                print(f"Could not remove lock file {lock_file}: {str(e)}")
+    
     # Print summary
     print("\nSummary:")
     print(f"Total video files found: {total_files}")
     print(f"Files processed this run: {processed}")
    
     
+    # Remove any lock file if interrupted before finishing current file
     if interrupted:
         print("Process was interrupted. Progress has been saved.")
         print(f"To continue, run the script again with the same parameters.")
+        # Clean up any lock files that may have been left due to interruption
+
+        if last_file_locked!=None and os.path.exists(last_file_locked):
+            try:
+                os.remove(last_file_locked)
+            except Exception as e:
+                print(f"Could not remove lock file {last_file_locked}: {str(e)}")
     else:
         print("All video files have been processed successfully.")
 
@@ -196,6 +226,7 @@ def main():
                       help='Output directory')
     parser.add_argument('--verbose','-v', action='store_true', help="not used yet")
     parser.add_argument('--reverse','-r', action='store_false', help="revers precessing order, now starts with the smallest file first")
+    parser.add_argument('--progress-interval', type=int, default=1, help="Progress update interval for on_progress (default: 1, set to N to print every Nth update)")
     
     args = parser.parse_args()
     
@@ -213,7 +244,7 @@ def main():
     print(f"input : {args.directory}")
     print(f"output: {args.output}")
     
-    convert(args.directory, args.output, verbose=args.verbose, sort_biggest_first=args.reverse)
+    convert(args.directory, args.output, verbose=args.verbose, sort_biggest_first=args.reverse, progress_update_interval=args.progress_interval)
 
 if __name__ == "__main__":
     main()
