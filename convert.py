@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 from ffmpeg import FFmpeg, Progress
 import datetime
+import shutil
 
 # Global flag to handle interruptions
 interrupted = False
@@ -20,6 +21,9 @@ def signal_handler(sig, frame):
 # Register the signal handler
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
+
+#get terminal size
+columns, rows = shutil.get_terminal_size()
 
 def get_video_files(directory, sort_largest_first=True):
     """Get all video files from the specified directory, ordered by size (largest first)."""
@@ -159,11 +163,22 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
             @ffmpeg.on("progress")
             def on_progress(progress: Progress):
                 progress_counter[0] += 1
+                #update the terminal size values every 10th call, to reduce the load
+                if progress_counter[0] % 10 == 0:
+                    columns, rows = shutil.get_terminal_size()
+                    
                 if progress_counter[0] % progress_update_interval != 0:
                     return
                 eta = 0 if progress.speed == 0 else (duration-progress.time.seconds)/progress.speed
                 time = datetime.timedelta(seconds=eta)
-                print(f"ETA:{str(time).split('.')[0]}s | {100 * progress.time.seconds / duration:.2f}% | size:{progress.size:,} | fps:{progress.fps:.2f} | bps:{progress.bitrate} | speed:{progress.speed:.2f}x", end='\r', flush=True)
+                # Clear the current line before printing (works in most terminals)
+                # Print progress, padding/truncating to 80 characters to avoid flicker
+                progress_str = (
+                    f"ETA:{str(time).split('.')[0]}s | {100 * progress.time.seconds / duration:.2f}% | "
+                    f"size:{progress.size:,} | fps:{progress.fps:.2f} | bps:{progress.bitrate} | speed:{progress.speed:.2f}x"
+                )
+                # Pad or truncate to 80 characters
+                print('\r' + progress_str.ljust(columns)[:columns], end='', flush=True)
                 if interrupted and ffmpeg_process is not None:
                     ffmpeg_process.terminate()
 
