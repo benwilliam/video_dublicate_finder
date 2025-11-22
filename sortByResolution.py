@@ -8,18 +8,43 @@ from ffmpeg import FFmpeg, Progress
 import datetime
 import shutil
 import re
-import multiprocessing
-from concurrent.futures import ProcessPoolExecutor
+import av
 
 def build_file_cache(folders):
+    # Common video file extensions
+    video_extensions = {
+        '.mp4', '.avi', '.mkv', '.mov', '.wmv', 
+        '.flv', '.webm', '.m4v', '.mpg', '.mpeg',
+        '.3gp', '.ts', '.mts', '.m2ts'
+    }
+    
     file_cache = []
     for folder in folders:
         for root, _, files in os.walk(folder):
             for file in files:
-                file_cache.append(os.path.join(root, file))
-    print(f"Total files found: {len(file_cache)}")  # Print total amount of files
+                # Check if file extension (lowercase) matches any video extension
+                if os.path.splitext(file.lower())[1] in video_extensions:
+                    file_cache.append(os.path.join(root, file))
+                    
+    print(f"Total video files found: {len(file_cache)}")
     return file_cache
 
+
+def get_video_resolution_av(file_path):
+    import av
+    try:
+        with av.open(file_path) as container:
+            stream = container.streams.video[0]
+            #return stream.width, stream.height
+            return {
+            "width":stream.width,
+            "height":stream.height,
+            "pixels":(stream.width*stream.height),
+            "filepath":file_path
+        }
+    except Exception as e:
+        raise Exception(f"Error reading video: {str(e)}")
+    
 def get_video_info(file_path):
     # Command to get video info in a single line
     cmd = [
@@ -83,35 +108,23 @@ if __name__ == "__main__":
 
     # For demonstration, you can modify these values:
     folders = [
-        "p:\\sonst",
-        "d:\\jd",
-        "d:\\02",
-        "d:\\done",
-        "c:\\sonst"
+        "c:\\sonst",
+        #"d:\\jd",
+        #"d:\\02",
+        #"d:\\done",
+        "p:\\sonst"
     ]
     foundFiles = build_file_cache(folders)
-    filetable = []
-    total_files = len(foundFiles)
-    
-    # Create a process pool with number of CPU cores
-    num_cores = multiprocessing.cpu_count()
-    processed_count = 0
-
-    def process_file(filepath):
+    filetable =[]
+    for index, filepath in enumerate(foundFiles):
         try:
-            return get_video_info(filepath)
+            fileinfo = get_video_resolution_av(filepath)
+            filetable.append(fileinfo)
+            print(f" {index + 1} / {len(foundFiles)} \r", end="")
         except Exception as e:
             print(f"\nError in file: {filepath} : {str(e)}")
-            return None
 
-    with ProcessPoolExecutor(max_workers=num_cores) as executor:
-        # Map the files to the process pool
-        results = executor.map(process_file, foundFiles)
-        
-        # Filter out None results from failed processing
-        filetable = [r for r in results if r is not None]
-
-    # Sort the filetable by pixels (resolution) in descending order
+     # Sort the filetable by pixels (resolution) in descending order
     filetable.sort(key=lambda x: x['pixels'])
     
     with open("orderedbypixels.txt", "w", encoding="utf-8") as f:

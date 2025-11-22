@@ -1,6 +1,6 @@
 import os
-import itertools
 import subprocess
+import re
 
 def build_file_cache(folders):
     file_cache = []
@@ -8,11 +8,18 @@ def build_file_cache(folders):
         for root, _, files in os.walk(folder):
             for file in files:
                 file_cache.append(os.path.join(root, file))
+    print(f"Total files found: {len(file_cache)}")  # Print total amount of files
     return file_cache
 
 def find_files_by_name_cached(file_cache, filter_str):
     filter_str = filter_str.lower()
-    return [path for path in file_cache if filter_str in os.path.basename(path).lower()]
+    def clean_filename(path):
+        # Remove all non-alphanumeric characters
+        return re.sub(r'[^a-zA-Z0-9]', '', os.path.basename(path).lower())
+    return sorted(
+        [path for path in file_cache if filter_str in clean_filename(path)],
+        key=lambda path: clean_filename(path)
+    )
 
 def read_backup(filename):
     if os.path.exists(filename):
@@ -24,47 +31,52 @@ def write_backup(filename, filter_str):
     with open(filename, "w", encoding="utf-8") as f:
         f.write(filter_str)
 
-def auto_filter(folders, charset='abcdefghijklmnopqrstuvwxyz0123456789_-,!', max_files=50, backup_file="backupplaybyname.txt"):
+def recursive_filter(file_cache, charset, max_files, backup_file, filter_str="", resume=False, backup_str=None):
+    skip = resume and backup_str is not None
+    resume_reached = False
+    for ch in charset:
+        current_str = filter_str + ch
+        # Resume logic: skip until backup_str is reached, then continue normally
+        if skip:
+            if not backup_str.startswith(current_str):
+                continue
+            if backup_str == current_str:
+                skip = False
+                resume_reached = True
+        matches = find_files_by_name_cached(file_cache, current_str)
+        if len(matches) > max_files:
+            # Go deeper recursively, propagate resume_reached
+            child_resume_reached = recursive_filter(
+                file_cache, charset, max_files, backup_file,
+                current_str, skip, backup_str
+            )
+            if child_resume_reached:
+                skip = False
+                resume_reached = True
+        elif 1 < len(matches) <= max_files:
+            print(f"Filter: '{current_str}' found {len(matches)} files.")
+            with open("playbyname.txt", "w", encoding="utf-8") as f:
+                for path in matches:
+                    f.write(path + "\n")
+            write_backup(backup_file, current_str)
+            subprocess.run([
+                r"d:\mpv\mpv.exe",
+                "--playlist=playbyname.txt",
+                "--playlist-start=0",
+                "--fullscreen",
+                "--script-opts-append=osc-visibility=always"
+            ])
+        else:
+            print(f"skipping: {current_str}")
+    return resume_reached
+
+def auto_filter(folders, charset=None, max_files=50, backup_file="backupplaybyname.txt"):
+    if charset is None:
+        charset = list('abcdefghijklmnopqrstuvwxyz0123456789')
     file_cache = build_file_cache(folders)
     backup_str = read_backup(backup_file)
-    length = len(backup_str) if backup_str else 1
     try:
-        while True:
-            found_any = False
-            combos = itertools.product(charset, repeat=length)
-            skip = True if backup_str else False
-            for combo in combos:
-                filter_str = ''.join(combo)
-                if skip:
-                    if filter_str != backup_str:
-                        continue
-                    else:
-                        skip = False  # Found the backup, start processing from here
-                matches = find_files_by_name_cached(file_cache, filter_str)
-                if len(matches) > max_files:
-                    length += 1
-                    backup_str = None  # Reset skip for next length
-                    break  # Go deeper with longer filter_str
-                elif 1 < len(matches) <= max_files:
-                    print(f"Filter: '{filter_str}' found {len(matches)} files.")
-                    with open("playbyname.txt", "w", encoding="utf-8") as f:
-                        for path in matches:
-                            f.write(path + "\n")
-                    write_backup(backup_file, filter_str)
-                    subprocess.run([
-                        r"d:\mpv\mpv.exe",
-                        "--playlist=playbyname.txt",
-                        "--fullscreen",
-                        "--script-opts-append=osc-visibility=always"
-                    ])
-                    found_any = True
-                    # Continue with next combination
-                # If no files found or only one file found, just continue to next combination
-                else:
-                    if not found_any:
-                        length += 1
-                    print(f"skipping: {filter_str}" )
-                    backup_str = None  # Only skip on first loop after resume
+        recursive_filter(file_cache, charset, max_files, backup_file, "", resume=bool(backup_str), backup_str=backup_str)
     except KeyboardInterrupt:
         print("Interrupted by user. Exiting gracefully.")
 
@@ -80,6 +92,7 @@ if __name__ == "__main__":
         "d:\\jd",
         "d:\\02",
         "d:\\done",
+        "d:\\01",
         "c:\\sonst"
     ]
     auto_filter(folders)

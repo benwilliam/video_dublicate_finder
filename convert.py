@@ -164,8 +164,8 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
             def on_progress(progress: Progress):
                 progress_counter[0] += 1
                 #update the terminal size values every 10th call, to reduce the load
-                if progress_counter[0] % 10 == 0:
-                    columns, rows = shutil.get_terminal_size()
+                #if progress_counter[0] % 10 == 0:
+                    #columns, rows = shutil.get_terminal_size()
                     
                 if progress_counter[0] % progress_update_interval != 0:
                     return
@@ -175,7 +175,7 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
                 # Print progress, padding/truncating to 80 characters to avoid flicker
                 progress_str = (
                     f"ETA:{str(time).split('.')[0]}s | {100 * progress.time.seconds / duration:.2f}% | "
-                    f"size:{progress.size:,} | fps:{progress.fps:.2f} | bps:{progress.bitrate} | speed:{progress.speed:.2f}x"
+                    f"size:{progress.size:,}Bytes | ETA size:{int((duration*progress.bitrate)/8):,}kBytes | fps:{progress.fps:.2f} | bps:{progress.bitrate} | speed:{progress.speed:.2f}x"
                 )
                 # Pad or truncate to 80 characters
                 print('\r' + progress_str.ljust(columns)[:columns], end='', flush=True)
@@ -186,7 +186,6 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
             ffmpeg.execute()
             ffmpeg_process = None
            
-
              # Compare durations and delete original if difference < 5 seconds
             try:
                 orig_info = get_video_info(file_path)
