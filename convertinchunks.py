@@ -9,6 +9,7 @@ from ffmpeg import FFmpeg, Progress
 import datetime
 import shutil
 import glob
+import time
 
 # Global flag to handle interruptions
 interrupted = False
@@ -16,8 +17,9 @@ interrupted = False
 # Handle keyboard interruptions (Ctrl+C)
 def signal_handler(sig, frame):
     global interrupted
-    print("\nInterruption received. Saving progress and exiting gracefully...")
-    interrupted = True
+    if not interrupted:
+        print("\nInterruption received. Checking state...")
+        interrupted = True
 
 # Register the signal handler
 signal.signal(signal.SIGINT, signal_handler)
@@ -37,16 +39,12 @@ def get_video_files(directory, sort_largest_first=True):
     video_files = []
     root_path = Path(directory).resolve()
     
-    # Use rglob to find all files recursively
     for path in root_path.rglob('*'):
-        # Calculate path relative to the input directory
         try:
             rel_path = path.relative_to(root_path)
         except ValueError:
-            continue # Should not happen normally
+            continue
 
-        # Check if any folder in the relative path starts with '.' (Hidden folders)
-        # Or if the file itself starts with '.'
         if any(part.startswith('.') for part in rel_path.parts):
             continue
             
@@ -57,13 +55,10 @@ def get_video_files(directory, sort_largest_first=True):
             except OSError:
                 continue
     
-    # Sort by file size in descending order (largest first)
     video_files.sort(key=lambda x: x[1], reverse=sort_largest_first)
-    
     return [file_path for file_path, _ in video_files]
 
 def get_video_info(file_path):
-    # Command to get video info in a single line
     cmd = [
         'ffprobe', 
         '-v', 'error', 
@@ -82,7 +77,6 @@ def get_video_info(file_path):
     if result.returncode != 0:
         return {"duration": 0, "size": 0, "codec": "unknown", "resolution": "unknown", "framerate": 0}
     
-    # Parse the output
     output = result.stdout.strip()
     output = output.replace('\n', '|')
     parts = output.split('|')
@@ -117,23 +111,18 @@ def get_video_info(file_path):
         return {"duration": 0, "size": 0, "codec": "unknown", "resolution": "unknown", "framerate": 0}
 
 def split_video(input_path, output_dir, duration, file_size):
-    """
-    Splits video into ~100MB chunks using ffmpeg segment muxer based on time calculation.
-    """
     chunk_pattern = os.path.join(output_dir, "chunk_%03d.mp4")
     
-    # Check if we already have chunks
     existing_chunks = glob.glob(os.path.join(output_dir, "chunk_*.mp4"))
     if existing_chunks:
         print(f"  Found {len(existing_chunks)} existing source chunks. Skipping split.")
         return
 
-    # Calculate segment time to achieve approx 100MB
     target_size_bytes = 100 * 1024 * 1024 # 100 MB
     
     if file_size > 0 and duration > 0:
         segment_time = (target_size_bytes / file_size) * duration
-        segment_time = max(10, segment_time) # Min 10s
+        segment_time = max(10, segment_time)
     else:
         segment_time = 300 
 
@@ -154,13 +143,11 @@ def split_video(input_path, output_dir, duration, file_size):
     subprocess.run(cmd, check=True)
 
 def merge_videos(chunk_list, output_file):
-    """Merges encoded chunks into final file."""
     if not chunk_list:
         raise Exception("No chunks to merge!")
 
     concat_file = output_file + ".txt"
     
-    # Write absolute paths with forward slashes to concat file
     with open(concat_file, 'w', encoding='utf-8') as f:
         for chunk in chunk_list:
             p = Path(chunk).absolute()
@@ -192,7 +179,6 @@ def merge_videos(chunk_list, output_file):
                 pass
 
 def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progress_update_interval=1):
-    # Get video files (now ignores hidden folders)
     video_files = get_video_files(directory, sort_biggest_first)
     total_files = len(video_files)
     print(f"Found {total_files} video files in {directory}")
@@ -202,7 +188,10 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
     last_file_locked = None
 
     for i, file_path in enumerate(video_files):
-        if interrupted: break
+        # Only break outer loop if interrupted AND we aren't in the middle of finishing the last chunk
+        if interrupted:
+            print("Process stopped by user.")
+            break
 
         lock_file = file_path + ".lock"
         if os.path.exists(lock_file):
@@ -229,9 +218,7 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
             basename = os.path.splitext(os.path.basename(file_path))[0]
             final_output_file = os.path.join(outputdir, basename + ".mp4")
             
-            # --- DIRECTORY SETUP ---
             input_dir_path = os.path.dirname(file_path)
-            # Temp folders start with .tmp which will be ignored by get_video_files on next run
             input_work_dir = os.path.join(input_dir_path, f".tmp_chunks_{basename}")
             os.makedirs(input_work_dir, exist_ok=True)
 
@@ -248,17 +235,25 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
             if existing_encoded:
                 last_encoded_chunk = existing_encoded[-1]
                 print(f"  [Resume Check] Deleting last encoded chunk: {os.path.basename(last_encoded_chunk)}")
-                try:
-                    os.remove(last_encoded_chunk)
-                except OSError:
-                    pass
+                try: os.remove(last_encoded_chunk)
+                except OSError: pass
             
             # --- 2. TRANSCODE ---
             source_chunks = sorted(glob.glob(os.path.join(input_work_dir, "chunk_*.mp4")))
             encoded_chunks_list = []
             
+            completed_chunks_in_this_loop = True
+
             for c_idx, chunk_path in enumerate(source_chunks):
-                if interrupted: break
+                is_last_chunk = (c_idx == len(source_chunks) - 1)
+                
+                # Handling Interrupts in loop
+                if interrupted:
+                    if is_last_chunk:
+                        print("\n  ! Interrupt received, but this is the LAST chunk. Finishing file processing...")
+                    else:
+                        completed_chunks_in_this_loop = False
+                        break
                 
                 chunk_name = os.path.basename(chunk_path)
                 encoded_chunk_path = os.path.join(output_work_dir, f"{os.path.splitext(chunk_name)[0]}_encoded.mp4")
@@ -274,61 +269,83 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
 
                 print(f"  [Chunk {c_idx+1}/{len(source_chunks)}] Encoding...")
 
-                ffmpeg = (
-                    FFmpeg()
-                    .option("y")
-                    .option("hide_banner")
-                    .option("hwaccel", "auto")
-                    .input(chunk_path)
-                    .output(
-                        encoded_chunk_path,
-                        vcodec="libvvenc",
-                        preset="fast",
-                        acodec="copy",
+                # Define the FFmpeg task
+                def run_ffmpeg_task():
+                    nonlocal ffmpeg_process
+                    ffmpeg = (
+                        FFmpeg()
+                        .option("y")
+                        .option("hide_banner")
+                        .option("hwaccel", "auto")
+                        .input(chunk_path)
+                        .output(
+                            encoded_chunk_path,
+                            vcodec="libvvenc",
+                            preset="fast",
+                            acodec="copy",
+                        )
                     )
-                )
 
-                progress_counter = [0]
+                    progress_counter = [0]
 
-                @ffmpeg.on("progress")
-                def on_progress(progress: Progress):
-                    progress_counter[0] += 1
-                    if progress_counter[0] % progress_update_interval != 0:
-                        return
-                    
-                    chunk_eta = 0 if progress.speed == 0 else (chunk_duration-progress.time.seconds)/progress.speed
-                    time_obj = datetime.timedelta(seconds=chunk_eta)
-                    
-                    progress_str = (
-                        f"    Chunk ETA:{str(time_obj).split('.')[0]}s | {100 * progress.time.seconds / chunk_duration:.2f}% | "
-                        f"fps:{progress.fps:.2f} | speed:{progress.speed:.2f}x"
-                    )
-                    print('\r' + progress_str.ljust(columns)[:columns], end='', flush=True)
-                    
-                    if interrupted and ffmpeg_process is not None:
-                        ffmpeg_process.terminate()
+                    @ffmpeg.on("progress")
+                    def on_progress(progress: Progress):
+                        progress_counter[0] += 1
+                        if progress_counter[0] % progress_update_interval != 0:
+                            return
+                        
+                        chunk_eta = 0 if progress.speed == 0 else (chunk_duration-progress.time.seconds)/progress.speed
+                        time_obj = datetime.timedelta(seconds=chunk_eta)
+                        
+                        progress_str = (
+                            f"    Chunk ETA:{str(time_obj).split('.')[0]}s | {100 * progress.time.seconds / chunk_duration:.2f}% | "
+                            f"fps:{progress.fps:.2f} | speed:{progress.speed:.2f}x"
+                        )
+                        print('\r' + progress_str.ljust(columns)[:columns], end='', flush=True)
+                        
+                        # Only terminate if it is NOT the last chunk
+                        if interrupted and ffmpeg_process is not None and not is_last_chunk:
+                            ffmpeg_process.terminate()
 
-                ffmpeg_process = ffmpeg
-                try:
+                    ffmpeg_process = ffmpeg
                     ffmpeg.execute()
+
+                # Execution Logic with Retry for Last Chunk
+                try:
+                    run_ffmpeg_task()
                 except Exception as e:
-                    if interrupted:
+                    # If interrupted during the last chunk, the OS signal likely killed the subprocess.
+                    # We catch it, print, and RETRY immediately to finish the job.
+                    if interrupted and is_last_chunk:
+                         print("\n  ! Interrupted during last chunk execution. Retrying to finalize file...")
+                         try:
+                             ffmpeg_process = None # Reset
+                             run_ffmpeg_task()
+                         except Exception as e2:
+                             print(f"\n  Failed to finish last chunk despite retry: {e2}")
+                             completed_chunks_in_this_loop = False
+                             break
+                    elif interrupted:
+                        # Normal interruption in middle of list
                         print("\nEncoding interrupted.")
                         if os.path.exists(encoded_chunk_path):
                             try: os.remove(encoded_chunk_path)
                             except: pass
+                        completed_chunks_in_this_loop = False
                         break
                     else:
                         print(f"\nError encoding chunk {chunk_path}: {e}")
                         raise e
+                
                 ffmpeg_process = None
                 print("") 
 
-            if interrupted:
+            # Break outer loop if we didn't finish the chunks (and weren't saved by the last-chunk logic)
+            if interrupted and not completed_chunks_in_this_loop:
                 break
 
             # --- 3. MERGE ---
-            if encoded_chunks_list:
+            if encoded_chunks_list and completed_chunks_in_this_loop:
                 merge_videos(encoded_chunks_list, final_output_file)
 
                 # --- 4. CLEANUP & VERIFY ---
@@ -348,10 +365,16 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
                         print(f"\nDuration mismatch! ({orig_duration:.2f}s vs {out_duration:.2f}s) Kept temp files.")
                 except Exception as e:
                     print(f"\nError in cleanup: {str(e)}")
-            else:
+            elif not encoded_chunks_list:
                  print("Error: No chunks were encoded.")
-
+            
             processed_count += 1
+            
+            # If interrupted was set during the last chunk, we finished that file.
+            # Now we break the loop to stop processing the *next* file.
+            if interrupted:
+                print("Finished last file completion. Stopping script now.")
+                break
 
         except Exception as e:
             print(f"Error processing {file_path}: {str(e)}")
@@ -368,12 +391,10 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
     print(f"Processed: {processed_count}")
    
     if interrupted:
-        print("Interrupted. Resumable state saved.")
+        print("Script finish (Interrupted).")
         if last_file_locked and os.path.exists(last_file_locked):
-            try:
-                os.remove(last_file_locked)
-            except:
-                pass
+            try: os.remove(last_file_locked)
+            except: pass
 
 def main():
     parser = argparse.ArgumentParser()
