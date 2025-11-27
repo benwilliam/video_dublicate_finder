@@ -26,10 +26,10 @@ signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 # Get terminal size
-try:
-    columns, rows = shutil.get_terminal_size()
-except:
-    columns, rows = 80, 24
+#try:
+#    columns, rows = shutil.get_terminal_size()
+#except:
+columns, rows = 118, 24
 
 def get_video_files(directory, sort_largest_first=True):
     """Get all video files from the specified directory, ordered by size (largest first).
@@ -146,13 +146,21 @@ def merge_videos(chunk_list, output_file):
     if not chunk_list:
         raise Exception("No chunks to merge!")
 
-    concat_file = output_file + ".txt"
+    # 1. Determine the directory where the chunks are located
+    chunk_dir = os.path.dirname(os.path.abspath(chunk_list[0]))
     
-    with open(concat_file, 'w', encoding='utf-8') as f:
+    # 2. Create the concat file INSIDE that directory
+    concat_file_path = os.path.join(chunk_dir, "concat_list.txt")
+    
+    with open(concat_file_path, 'w', encoding='utf-8') as f:
         for chunk in chunk_list:
-            p = Path(chunk).absolute()
-            path_str = str(p).replace('\\', '/')
-            f.write(f"file '{path_str}'\n")
+            # 3. Use ONLY the filename (relative path)
+            filename = os.path.basename(chunk)
+            
+            # 4. Escape single quotes for FFmpeg syntax (Dad's.mp4 -> Dad'\''s.mp4)
+            safe_filename = filename.replace("'", "'\\''")
+            
+            f.write(f"file '{safe_filename}'\n")
     
     print(f"  Merging {len(chunk_list)} chunks into final video...")
     
@@ -161,20 +169,22 @@ def merge_videos(chunk_list, output_file):
         '-y', '-hide_banner', '-loglevel', 'error',
         '-f', 'concat',
         '-safe', '0',
-        '-i', concat_file,
+        '-i', concat_file_path,
         '-c', 'copy',
         output_file
     ]
     
     try:
+        # 5. Run subprocess. FFmpeg resolves relative paths in concat files 
+        # relative to the location of the concat file itself.
         subprocess.run(cmd, check=True)
     except subprocess.CalledProcessError as e:
         print(f"  Merge failed: {e}")
         raise e
     finally:
-        if os.path.exists(concat_file):
+        if os.path.exists(concat_file_path):
             try:
-                os.remove(concat_file)
+                os.remove(concat_file_path)
             except:
                 pass
 
@@ -287,10 +297,11 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
                     )
 
                     progress_counter = [0]
-
+                    lastProgress = None
                     @ffmpeg.on("progress")
                     def on_progress(progress: Progress):
                         progress_counter[0] += 1
+                        lastProgress = progress
                         if progress_counter[0] % progress_update_interval != 0:
                             return
                         
@@ -299,7 +310,7 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
                         
                         progress_str = (
                             f"    Chunk ETA:{str(time_obj).split('.')[0]}s | {100 * progress.time.seconds / chunk_duration:.2f}% | "
-                            f"fps:{progress.fps:.2f} | speed:{progress.speed:.2f}x"
+                            f"size:{progress.size/1024:,}kBytes | ETA size:{int((chunk_duration*progress.bitrate)/8):,}kBytes | fps:{progress.fps:.2f} | bps:{progress.bitrate} | speed:{progress.speed:.2f}x"
                         )
                         print('\r' + progress_str.ljust(columns)[:columns], end='', flush=True)
                         
@@ -309,6 +320,13 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
 
                     ffmpeg_process = ffmpeg
                     ffmpeg.execute()
+
+                    #only for my own peace print one last line
+                    outputsize = os.path.getsize(encoded_chunk_path) if os.path.exists(encoded_chunk_path) else 0
+                    progress_str = (
+                        f"    Chunk ETA:0:00:00s | 100.00% | size:{outputsize/1024:,}kBytes | ETA size:{outputsize/1024:,}kBytes | fps:00.00 | bps:00.00 | speed:00.00x      "
+                    )
+                    print('\r' + progress_str.ljust(columns)[:columns], end='', flush=True)
 
                 # Execution Logic with Retry for Last Chunk
                 try:

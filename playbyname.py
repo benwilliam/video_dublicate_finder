@@ -3,12 +3,31 @@ import subprocess
 import re
 
 def build_file_cache(folders):
+    # Common video file extensions
+    video_extensions = {
+        '.mp4', '.avi', '.mkv', '.mov', '.wmv', 
+        '.flv', '.webm', '.m4v', '.mpg', '.mpeg',
+        '.3gp', '.ts', '.mts', '.m2ts'
+    }
+    
     file_cache = []
     for folder in folders:
-        for root, _, files in os.walk(folder):
-            for file in files:
-                file_cache.append(os.path.join(root, file))
-    print(f"Total files found: {len(file_cache)}")  # Print total amount of files
+        if os.path.exists(folder):
+            print(f"Scanning folder: {folder}")
+            folder_count = 0
+            for root, dirs, files in os.walk(folder):
+                # Filter out hidden directories and directories starting with a dot
+                dirs[:] = [d for d in dirs if not d.startswith('.') and not os.path.islink(os.path.join(root, d))]
+                
+                for file in files:
+                    # Only add video files
+                    if os.path.splitext(file.lower())[1] in video_extensions:
+                        file_cache.append(os.path.join(root, file))
+                        folder_count += 1
+            print(f"  Found {folder_count} video files in: {folder}")
+        else:
+            print(f"Folder does not exist: {folder}")
+    print(f"Total video files found: {len(file_cache)}")
     return file_cache
 
 def find_files_by_name_cached(file_cache, filter_str):
@@ -70,7 +89,7 @@ def recursive_filter(file_cache, charset, max_files, backup_file, filter_str="",
             print(f"skipping: {current_str}")
     return resume_reached
 
-def auto_filter(folders, charset=None, max_files=50, backup_file="backupplaybyname.txt"):
+def auto_filter(folders, charset=None, max_files=100, backup_file="backupplaybyname.txt"):
     if charset is None:
         charset = list('abcdefghijklmnopqrstuvwxyz0123456789')
     file_cache = build_file_cache(folders)
@@ -89,6 +108,7 @@ if __name__ == "__main__":
     # For demonstration, you can modify these values:
     folders = [
         "p:\\sonst",
+        "t:\\",
         "d:\\jd",
         "d:\\02",
         "d:\\done",
