@@ -137,6 +137,7 @@ def split_video(input_path, output_dir, duration, file_size):
         '-f', 'segment',
         '-segment_format', 'mp4',
         '-segment_time', str(segment_time),
+        '-segment_start_number', '1',
         '-reset_timestamps', '1', 
         chunk_pattern
     ]
@@ -310,7 +311,7 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
                         
                         progress_str = (
                             f"    Chunk ETA:{str(time_obj).split('.')[0]}s | {100 * progress.time.seconds / chunk_duration:.2f}% | "
-                            f"size:{progress.size/1024:,}kBytes | ETA size:{int((chunk_duration*progress.bitrate)/8):,}kBytes | fps:{progress.fps:.2f} | bps:{progress.bitrate} | speed:{progress.speed:.2f}x"
+                            f"size:{progress.size//1024:,}kB | ETA size:{int((chunk_duration*progress.bitrate)/8):,}kB | fps:{progress.fps:.2f} | bps:{progress.bitrate} | speed:{progress.speed:.2f}x"
                         )
                         print('\r' + progress_str.ljust(columns)[:columns], end='', flush=True)
                         
@@ -324,7 +325,7 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
                     #only for my own peace print one last line
                     outputsize = os.path.getsize(encoded_chunk_path) if os.path.exists(encoded_chunk_path) else 0
                     progress_str = (
-                        f"    Chunk ETA:0:00:00s | 100.00% | size:{outputsize/1024:,}kBytes | ETA size:{outputsize/1024:,}kBytes | fps:00.00 | bps:00.00 | speed:00.00x      "
+                        f"    Chunk ETA:0:00:00s | 100.00% | size:{outputsize//1024:,}kB | ETA size:{outputsize//1024:,}kB | fps:00.00 | bps:00.00 | speed:00.00x      "
                     )
                     print('\r' + progress_str.ljust(columns)[:columns], end='', flush=True)
 

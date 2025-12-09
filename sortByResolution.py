@@ -109,10 +109,11 @@ if __name__ == "__main__":
     # For demonstration, you can modify these values:
     folders = [
         "c:\\sonst",
-        #"d:\\jd",
-        #"d:\\02",
-        #"d:\\done",
-        "p:\\sonst"
+        "d:\\jd",
+        "d:\\02",
+        "d:\\done",
+        "p:\\sonst",
+        "t:\\"
     ]
     foundFiles = build_file_cache(folders)
     filetable =[]
