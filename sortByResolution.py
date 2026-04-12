@@ -20,12 +20,21 @@ def build_file_cache(folders):
     
     file_cache = []
     for folder in folders:
-        for root, _, files in os.walk(folder):
-            for file in files:
-                # Check if file extension (lowercase) matches any video extension
-                if os.path.splitext(file.lower())[1] in video_extensions:
-                    file_cache.append(os.path.join(root, file))
-                    
+        if os.path.exists(folder):
+            print(f"Scanning folder: {folder}")
+            folder_count = 0
+            for root, dirs, files in os.walk(folder):
+                # Filter out hidden directories and directories starting with a dot
+                dirs[:] = [d for d in dirs if not d.startswith('.') and not os.path.islink(os.path.join(root, d))]
+                
+                for file in files:
+                    # Only add video files
+                    if os.path.splitext(file.lower())[1] in video_extensions:
+                        file_cache.append(os.path.join(root, file))
+                        folder_count += 1
+            print(f"  Found {folder_count} video files in: {folder}")
+        else:
+            print(f"Folder does not exist: {folder}")
     print(f"Total video files found: {len(file_cache)}")
     return file_cache
 
@@ -128,9 +137,9 @@ if __name__ == "__main__":
      # Sort the filetable by pixels (resolution) in descending order
     filetable.sort(key=lambda x: x['pixels'])
     
-    with open("orderedbypixels.txt", "w", encoding="utf-8") as f:
+    with open("resolutionlocal.txt", "w", encoding="utf-8") as f:
         for entry in filetable:
             f.write(f"{entry['filepath']}\n") #| {entry['resolution']} | {entry['framerate']:.2f} fps | {entry['duration']:.2f} sec | {entry['size']//(1024*1024)} MB\n")
 
-    print("File list sorted by resolution written to 'orderedbypixels.txt'")
+    print("File list sorted by resolution written to 'resolutionlocal.txt'")
 

@@ -89,7 +89,7 @@ def recursive_filter(file_cache, charset, max_files, backup_file, filter_str="",
             print(f"skipping: {current_str}")
     return resume_reached
 
-def auto_filter(folders, charset=None, max_files=100, backup_file="backupplaybyname.txt"):
+def auto_filter(folders, charset=None, max_files=30, backup_file="backupplaybyname.txt"):
     if charset is None:
         charset = list('abcdefghijklmnopqrstuvwxyz0123456789')
     file_cache = build_file_cache(folders)
@@ -107,12 +107,14 @@ if __name__ == "__main__":
 
     # For demonstration, you can modify these values:
     folders = [
-        "p:\\sonst",
-        "t:\\",
+        "c:\\sonst",
         "d:\\jd",
         "d:\\02",
         "d:\\done",
-        "d:\\01",
-        "c:\\sonst"
+        #"d:\\01",
+        #"t:\\",
+        "p:\\Untitled",
+        "p:\\Untitled 1"
+        
     ]
     auto_filter(folders)
