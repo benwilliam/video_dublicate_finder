@@ -224,7 +224,7 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
             print(f"[{i+1}/{total_files}] Processing: {file_path}")
             
             video_info = get_video_info(file_path)
-            print(f"  Duration:{video_info['duration']:.2f}s, Size:{current_size//1048576:,}MB, Codec:{video_info['codec']}, Resolution:{video_info['resolution']}" )             
+            print(f"  Duration:{video_info['duration']:.2f}s, Size:{current_size//1048576:,}MB, Codec:{video_info['codec']}, Resolution:{video_info['resolution']}, Framerate:{video_info['framerate']:.2f}" )             
             
             basename = os.path.splitext(os.path.basename(file_path))[0]
             final_output_file = os.path.join(outputdir, basename + ".mp4")
@@ -291,10 +291,12 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
                         .input(chunk_path)
                         .output(
                             encoded_chunk_path,
+			                vf="fps=fps=25:round=up",
                             vcodec="libvvenc",
                             preset="fast",
                             acodec="copy",
                         )
+                        
                     )
 
                     progress_counter = [0]
