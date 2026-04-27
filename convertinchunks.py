@@ -242,12 +242,12 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
             if interrupted: break
 
             # --- SAFE RESUME CHECK ---
-            existing_encoded = sorted(glob.glob(os.path.join(output_work_dir, "*_encoded.mp4")))
-            if existing_encoded:
-                last_encoded_chunk = existing_encoded[-1]
-                print(f"  [Resume Check] Deleting last encoded chunk: {os.path.basename(last_encoded_chunk)}")
-                try: os.remove(last_encoded_chunk)
-                except OSError: pass
+            # existing_encoded = sorted(glob.glob(os.path.join(output_work_dir, "*_encoded.mp4")))
+            # if existing_encoded:
+            #     last_encoded_chunk = existing_encoded[-1]
+            #     print(f"  [Resume Check] Deleting last encoded chunk: {os.path.basename(last_encoded_chunk)}")
+            #     try: os.remove(last_encoded_chunk)
+            #     except OSError: pass
             
             # --- 2. TRANSCODE ---
             source_chunks = sorted(glob.glob(os.path.join(input_work_dir, "chunk_*.mp4")))
@@ -271,9 +271,14 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
                 encoded_chunks_list.append(encoded_chunk_path)
 
                 if os.path.exists(encoded_chunk_path):
-                    if os.path.getsize(encoded_chunk_path) > 1024:
-                        print(f"  [Chunk {c_idx+1}/{len(source_chunks)}] Already encoded. Skipping.")
+                    src_duration = get_video_info(chunk_path)['duration']
+                    dst_duration = get_video_info(encoded_chunk_path)['duration']
+                    duration_diff = abs(src_duration - dst_duration)
+                    if src_duration > 0 and duration_diff <= 1.0:
+                        print(f"  [Chunk {c_idx+1}/{len(source_chunks)}] Already encoded (duration match: {src_duration:.2f}s ≈ {dst_duration:.2f}s). Skipping.")
                         continue
+                    else:
+                        print(f"  [Chunk {c_idx+1}/{len(source_chunks)}] Duration mismatch (src:{src_duration:.2f}s vs dst:{dst_duration:.2f}s). Re-encoding...")
                 
                 chunk_info = get_video_info(chunk_path)
                 chunk_duration = chunk_info['duration']
