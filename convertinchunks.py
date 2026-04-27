@@ -10,16 +10,43 @@ import datetime
 import shutil
 import glob
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Global flag to handle interruptions
 interrupted = False
+
+# Thread-safe registry of all active ffmpeg processes
+_active_ffmpeg_lock = threading.Lock()
+_active_ffmpeg_processes = set()
+
+def _register_ffmpeg(proc):
+    with _active_ffmpeg_lock:
+        _active_ffmpeg_processes.add(proc)
+
+def _unregister_ffmpeg(proc):
+    with _active_ffmpeg_lock:
+        _active_ffmpeg_processes.discard(proc)
+
+def _terminate_all_ffmpeg():
+    with _active_ffmpeg_lock:
+        procs = list(_active_ffmpeg_processes)
+    for proc in procs:
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+# Thread-safe print lock so parallel workers don't interleave output
+_print_lock = threading.Lock()
 
 # Handle keyboard interruptions (Ctrl+C)
 def signal_handler(sig, frame):
     global interrupted
     if not interrupted:
-        print("\nInterruption received. Checking state...")
+        print("\nInterruption received. Stopping active encoders...")
         interrupted = True
+        _terminate_all_ffmpeg()
 
 # Register the signal handler
 signal.signal(signal.SIGINT, signal_handler)
@@ -189,13 +216,14 @@ def merge_videos(chunk_list, output_file):
             except:
                 pass
 
-def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progress_update_interval=1):
+def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progress_update_interval=1, parallel=1):
     video_files = get_video_files(directory, sort_biggest_first)
     total_files = len(video_files)
     print(f"Found {total_files} video files in {directory}")
+    if parallel > 1:
+        print(f"Parallel transcoding: up to {parallel} chunks at a time")
     
     processed_count = 0
-    ffmpeg_process = None 
     last_file_locked = None
 
     for i, file_path in enumerate(video_files):
@@ -255,17 +283,9 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
             
             completed_chunks_in_this_loop = True
 
+            # Build the work list: skip already-encoded chunks
+            work_items = []  # list of (c_idx, chunk_path, encoded_chunk_path)
             for c_idx, chunk_path in enumerate(source_chunks):
-                is_last_chunk = (c_idx == len(source_chunks) - 1)
-                
-                # Handling Interrupts in loop
-                if interrupted:
-                    if is_last_chunk:
-                        print("\n  ! Interrupt received, but this is the LAST chunk. Finishing file processing...")
-                    else:
-                        completed_chunks_in_this_loop = False
-                        break
-                
                 chunk_name = os.path.basename(chunk_path)
                 encoded_chunk_path = os.path.join(output_work_dir, f"{os.path.splitext(chunk_name)[0]}_encoded.mp4")
                 encoded_chunks_list.append(encoded_chunk_path)
@@ -279,15 +299,22 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
                         continue
                     else:
                         print(f"  [Chunk {c_idx+1}/{len(source_chunks)}] Duration mismatch (src:{src_duration:.2f}s vs dst:{dst_duration:.2f}s). Re-encoding...")
-                
+
+                work_items.append((c_idx, chunk_path, encoded_chunk_path))
+
+            def transcode_chunk(c_idx, chunk_path, encoded_chunk_path):
+                """Transcode a single chunk. Returns True on success, False on failure/interrupt."""
+                total_chunks = len(source_chunks)
                 chunk_info = get_video_info(chunk_path)
                 chunk_duration = chunk_info['duration']
+                use_progress_line = (parallel == 1)  # \r progress only makes sense single-threaded
 
-                print(f"  [Chunk {c_idx+1}/{len(source_chunks)}] Encoding...")
+                with _print_lock:
+                    print(f"  [Chunk {c_idx+1}/{total_chunks}] Encoding{' (parallel)' if parallel > 1 else ''}...")
 
-                # Define the FFmpeg task
+                ffmpeg_ref = [None]
+
                 def run_ffmpeg_task():
-                    nonlocal ffmpeg_process
                     ffmpeg = (
                         FFmpeg()
                         .option("y")
@@ -296,79 +323,109 @@ def convert(directory, outputdir, verbose=False, sort_biggest_first=True, progre
                         .input(chunk_path)
                         .output(
                             encoded_chunk_path,
-			                vf="fps=fps=25:round=up",
+                            vf="fps=fps=25:round=up",
                             vcodec="libvvenc",
                             preset="fast",
                             acodec="copy",
                         )
-                        
                     )
 
                     progress_counter = [0]
-                    lastProgress = None
                     @ffmpeg.on("progress")
                     def on_progress(progress: Progress):
                         progress_counter[0] += 1
-                        lastProgress = progress
                         if progress_counter[0] % progress_update_interval != 0:
                             return
-                        
-                        chunk_eta = 0 if progress.speed == 0 else (chunk_duration-progress.time.seconds)/progress.speed
+
+                        chunk_eta = 0 if progress.speed == 0 else (chunk_duration - progress.time.seconds) / progress.speed
                         time_obj = datetime.timedelta(seconds=chunk_eta)
-                        
+
+                        if use_progress_line:
+                            progress_str = (
+                                f"    Chunk ETA:{str(time_obj).split('.')[0]}s | {100 * progress.time.seconds / chunk_duration:.2f}% | "
+                                f"size:{progress.size//1024:,}kB | ETA size:{int((chunk_duration*progress.bitrate)/8):,}kB | fps:{progress.fps:.2f} | bps:{progress.bitrate} | speed:{progress.speed:.2f}x"
+                            )
+                            print('\r' + progress_str.ljust(columns)[:columns], end='', flush=True)
+                        else:
+                            # Parallel mode: only log at meaningful milestones to avoid interleaving noise
+                            pct = 100 * progress.time.seconds / chunk_duration if chunk_duration > 0 else 0
+                            if progress_counter[0] % max(1, progress_update_interval * 10) == 0:
+                                with _print_lock:
+                                    print(f"  [Chunk {c_idx+1}/{total_chunks}] {pct:.0f}% | ETA:{str(time_obj).split('.')[0]}s | fps:{progress.fps:.1f} | speed:{progress.speed:.2f}x")
+
+                        if interrupted and ffmpeg_ref[0] is not None:
+                            ffmpeg_ref[0].terminate()
+
+                    ffmpeg_ref[0] = ffmpeg
+                    _register_ffmpeg(ffmpeg)
+                    try:
+                        ffmpeg.execute()
+                    finally:
+                        _unregister_ffmpeg(ffmpeg)
+
+                    if use_progress_line:
+                        outputsize = os.path.getsize(encoded_chunk_path) if os.path.exists(encoded_chunk_path) else 0
                         progress_str = (
-                            f"    Chunk ETA:{str(time_obj).split('.')[0]}s | {100 * progress.time.seconds / chunk_duration:.2f}% | "
-                            f"size:{progress.size//1024:,}kB | ETA size:{int((chunk_duration*progress.bitrate)/8):,}kB | fps:{progress.fps:.2f} | bps:{progress.bitrate} | speed:{progress.speed:.2f}x"
+                            f"    Chunk ETA:0:00:00s | 100.00% | size:{outputsize//1024:,}kB | ETA size:{outputsize//1024:,}kB | fps:00.00 | bps:00.00 | speed:00.00x      "
                         )
                         print('\r' + progress_str.ljust(columns)[:columns], end='', flush=True)
-                        
-                        # Only terminate if it is NOT the last chunk
-                        if interrupted and ffmpeg_process is not None and not is_last_chunk:
-                            ffmpeg_process.terminate()
 
-                    ffmpeg_process = ffmpeg
-                    ffmpeg.execute()
-
-                    #only for my own peace print one last line
-                    outputsize = os.path.getsize(encoded_chunk_path) if os.path.exists(encoded_chunk_path) else 0
-                    progress_str = (
-                        f"    Chunk ETA:0:00:00s | 100.00% | size:{outputsize//1024:,}kB | ETA size:{outputsize//1024:,}kB | fps:00.00 | bps:00.00 | speed:00.00x      "
-                    )
-                    print('\r' + progress_str.ljust(columns)[:columns], end='', flush=True)
-
-                # Execution Logic with Retry for Last Chunk
                 try:
                     run_ffmpeg_task()
                 except Exception as e:
-                    # If interrupted during the last chunk, the OS signal likely killed the subprocess.
-                    # We catch it, print, and RETRY immediately to finish the job.
-                    if interrupted and is_last_chunk:
-                         print("\n  ! Interrupted during last chunk execution. Retrying to finalize file...")
-                         try:
-                             ffmpeg_process = None # Reset
-                             run_ffmpeg_task()
-                         except Exception as e2:
-                             print(f"\n  Failed to finish last chunk despite retry: {e2}")
-                             completed_chunks_in_this_loop = False
-                             break
-                    elif interrupted:
-                        # Normal interruption in middle of list
-                        print("\nEncoding interrupted.")
+                    if interrupted:
+                        with _print_lock:
+                            print(f"\n  [Chunk {c_idx+1}/{total_chunks}] Interrupted.")
                         if os.path.exists(encoded_chunk_path):
-                            try: os.remove(encoded_chunk_path)
-                            except: pass
+                            try:
+                                os.remove(encoded_chunk_path)
+                            except Exception:
+                                pass
+                        return False
+                    else:
+                        with _print_lock:
+                            print(f"\n  [Chunk {c_idx+1}/{total_chunks}] Error: {e}")
+                        raise
+
+                if use_progress_line:
+                    print("")
+                with _print_lock:
+                    print(f"  [Chunk {c_idx+1}/{total_chunks}] Done.")
+                return True
+
+            # --- Run chunks: parallel or sequential ---
+            if parallel <= 1 or len(work_items) <= 1:
+                # Sequential (original behaviour)
+                for c_idx, chunk_path, encoded_chunk_path in work_items:
+                    if interrupted:
                         completed_chunks_in_this_loop = False
                         break
-                    else:
-                        print(f"\nError encoding chunk {chunk_path}: {e}")
-                        raise e
-                
-                ffmpeg_process = None
-                print("") 
+                    ok = transcode_chunk(c_idx, chunk_path, encoded_chunk_path)
+                    if not ok:
+                        completed_chunks_in_this_loop = False
+                        break
+            else:
+                # Parallel execution
+                with ThreadPoolExecutor(max_workers=parallel) as executor:
+                    futures = {
+                        executor.submit(transcode_chunk, c_idx, chunk_path, encoded_chunk_path): (c_idx, chunk_path)
+                        for c_idx, chunk_path, encoded_chunk_path in work_items
+                        if not interrupted
+                    }
+                    for future in as_completed(futures):
+                        c_idx, chunk_path = futures[future]
+                        try:
+                            ok = future.result()
+                        except Exception as e:
+                            print(f"\n  [Chunk {c_idx+1}/{len(source_chunks)}] Unhandled error: {e}")
+                            ok = False
+                        if not ok:
+                            completed_chunks_in_this_loop = False
+                            # Cancel pending futures and terminate running encoders
+                            for f in futures:
+                                f.cancel()
+                            _terminate_all_ffmpeg()
 
-            # Break outer loop if we didn't finish the chunks (and weren't saved by the last-chunk logic)
-            if interrupted and not completed_chunks_in_this_loop:
-                break
 
             # --- 3. MERGE ---
             if encoded_chunks_list and completed_chunks_in_this_loop:
@@ -429,8 +486,14 @@ def main():
     parser.add_argument('--verbose','-v', action='store_true')
     parser.add_argument('--reverse','-r', action='store_false')
     parser.add_argument('--progress-interval', type=int, default=1)
+    parser.add_argument('--parallel', '-p', type=int, default=1, metavar='N',
+                        help='Number of chunks to transcode simultaneously (default: 1)')
     
     args = parser.parse_args()
+
+    if args.parallel < 1:
+        print("Error: --parallel must be at least 1")
+        sys.exit(1)
     
     if not os.path.isdir(args.directory):
         print(f"Error: {args.directory} is not a valid directory")
@@ -439,7 +502,8 @@ def main():
     if not os.path.exists(args.output):
         os.makedirs(args.output)
     
-    convert(args.directory, args.output, verbose=args.verbose, sort_biggest_first=args.reverse, progress_update_interval=args.progress_interval)
+    convert(args.directory, args.output, verbose=args.verbose, sort_biggest_first=args.reverse,
+            progress_update_interval=args.progress_interval, parallel=args.parallel)
 
 if __name__ == "__main__":
     main()
